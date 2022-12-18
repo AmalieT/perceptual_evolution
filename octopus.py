@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import os, sys
+from scipy.special import softmax
 
 class World():
 
@@ -81,32 +82,34 @@ class Octopus():
 		}
 
 		moves_dict = {i: lambda m=m: self.move(m) for i,m in enumerate(self.directions.keys())}
-		for m in moves_dict.values():
-			m()
-		n_moves = len(moves_dict.keys())
+
+		self.n_moves = len(moves_dict.keys())
 
 		self.actions_dict = {
 			**moves_dict,
-			n_moves: self.move_randomly,
-			n_moves+1: self.pause,
-			n_moves+2: self.eat_crab,
+			self.n_moves: self.move_randomly,
+			self.n_moves+1: self.pause,
+			self.n_moves+2: self.eat_crab,
 		}
+
+		self.n_actions = len(self.actions_dict.keys())
 
 		moves_rewards_dict = {i: {True: 0, False: -5} for i,m in enumerate(self.directions.keys())}
 
 		self.rewards_dict = {
 			**moves_rewards_dict,
-			n_moves: {True: 0, False: -5},
-			n_moves+1: {True: 0, False: 0},
-			n_moves+2: {True: 10, False: -1},
+			self.n_moves: {True: 0, False: -5},
+			self.n_moves+1: {True: 0, False: 0},
+			self.n_moves+2: {True: 10, False: -1},
 		}
 
 
 		self.perceptual_size = self.world.n_types**len(self.perceptual_neighbourhood)
-		self.decision_kernel = np.random.randint(0,len(self.actions_dict.keys()), self.perceptual_size)
+		self.decision_kernel = self.random_gene()
 
 	def samsara(self):
 		while self.lives > 0:
+			#The world is born anew and the octopus tries again
 			self.remaining_steps = self.permissible_steps
 			self.reward = 0
 			self.world.rebirth()
@@ -117,6 +120,7 @@ class Octopus():
 			self.lives -= 1
 
 		return self.total_reward
+
 	def next_action(self):
 
 		decision_int = int(sum([d*self.world.n_types**i for i,d in enumerate(self.perceptual_neighbourhood)]))
@@ -162,3 +166,89 @@ class Octopus():
 		self.perceptual_neighbourhood = self.world.get_perceptual_neighbourhood(self.x, self.y)
 
 		return result
+
+	def random_gene(self):
+		random_gene = np.random.randint(0, self.n_actions, self.perceptual_size)
+
+		return random_gene
+
+class MolluskEvolver():
+
+	def __init__(self, n_octopodes, n_generations):
+
+		self.n_octopodes=n_octopodes
+		self.n_generations=n_generations
+		
+		self.permissible_steps = 50
+		self.octopus_lives = 50
+
+		self.world = World(12, 12, 50)
+
+
+		self.octopode_ensemble = [self.create_octopus() for _ in range(self.n_octopodes)]
+		self.octopus_gene_length = len(self.octopode_ensemble[0].decision_kernel)
+		self.octopus_action_space = self.octopode_ensemble[0].n_actions
+		self.mutation_chance = 0.01
+
+	def create_octopus(self):
+		octopus = Octopus(self.world, permissible_steps=self.permissible_steps, n_lives=self.octopus_lives)
+
+		return octopus
+
+	def evolve_octopodes(self):
+		fitnesses = []
+		while self.n_generations > 0:
+			fitness = self.next_generation()
+			print(self.n_generations)
+			print(np.mean(fitness))
+			print(np.max(fitness))
+			print("\n")
+			fitnesses.append(fitness)
+			self.n_generations -= 1
+
+		return fitnesses
+
+
+	def next_generation(self):
+		#Octopodes live, die, and are reborn within the confines of a single list comprehension
+		raw_fitness = np.array([o.samsara() for o in self.octopode_ensemble])
+
+		norm_fitness = softmax(raw_fitness)
+
+		self.octopode_ensemble = self.panmixia(norm_fitness)
+		return raw_fitness/self.octopus_lives
+
+	def panmixia(self, octopus_fitness):
+		next_generation_octopodes = []
+		while len(next_generation_octopodes) < self.n_octopodes:
+			octopus_sub, octopus_domme = np.random.choice(self.octopode_ensemble, size=2, replace=False, p=octopus_fitness)
+			child_A, child_B = self.breed_octopodes(octopus_sub, octopus_domme)
+			next_generation_octopodes.append(child_A)
+			next_generation_octopodes.append(child_B)
+		
+		return next_generation_octopodes
+
+	def breed_octopodes(self, octopus_sub, octopus_domme):
+		split_spot = np.random.randint(0,self.octopus_gene_length)
+
+		def merge_genes(child_oct, oct_A, oct_B):
+			child_oct.decision_kernel[:split_spot] = oct_A.decision_kernel[:split_spot]
+			child_oct.decision_kernel[split_spot:] = oct_B.decision_kernel[split_spot:]
+
+		child_A = self.create_octopus()
+		merge_genes(child_A, octopus_sub, octopus_domme)
+		self.mutate(child_A)
+
+		child_B = self.create_octopus()
+		merge_genes(child_B, octopus_domme, octopus_sub)
+		self.mutate(child_B)
+
+		return child_A, child_B
+
+	def mutate(self, octopus):
+		mutation_mask = np.random.rand(self.octopus_gene_length) < self.mutation_chance
+		mutated_gene = octopus.random_gene()
+
+		octopus.decision_kernel = np.where(mutation_mask, mutated_gene, octopus.decision_kernel)
+
+		return octopus
