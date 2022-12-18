@@ -2,6 +2,7 @@ import numpy as np
 import random
 import os, sys
 from scipy.special import softmax
+from time import sleep
 
 class World():
 
@@ -88,7 +89,7 @@ class Octopus():
 		self.actions_dict = {
 			**moves_dict,
 			self.n_moves: self.move_randomly,
-			self.n_moves+1: self.pause,
+			self.n_moves+1: self.eat_crab,
 			self.n_moves+2: self.eat_crab,
 		}
 
@@ -99,7 +100,7 @@ class Octopus():
 		self.rewards_dict = {
 			**moves_rewards_dict,
 			self.n_moves: {True: 0, False: -5},
-			self.n_moves+1: {True: 0, False: 0},
+			self.n_moves+1: {True: 10, False: -1},
 			self.n_moves+2: {True: 10, False: -1},
 		}
 
@@ -120,6 +121,36 @@ class Octopus():
 			self.lives -= 1
 
 		return self.total_reward
+
+	def illustrated_life(self):
+		self.remaining_steps = self.permissible_steps
+		self.reward = 0
+		self.world.rebirth()
+
+		def mapping(square):
+			if square == 0:
+				return "🌊 "
+			if square == 1:
+				return "🦀 "
+			if square == 2:
+				return "🧱 🧱"
+
+		while self.remaining_steps > 0:
+			print("Total Score: {}\n".format(self.reward))
+			for i in range(self.world.height):
+				line_str = ""
+				for j in range(self.world.width):
+					if i == self.x and j == self.y:
+						line_str += "🐙 "
+					else:
+						line_str += mapping(self.world.grid[i,j])
+				# line_str += "\n"
+				print(line_str)
+			self.next_action()
+			sleep(0.5)
+			os.system('clear')
+		return self
+
 
 	def next_action(self):
 
@@ -180,7 +211,7 @@ class MolluskEvolver():
 		self.n_generations=n_generations
 		
 		self.permissible_steps = 50
-		self.octopus_lives = 50
+		self.octopus_lives = 10
 
 		self.world = World(12, 12, 50)
 
@@ -188,7 +219,7 @@ class MolluskEvolver():
 		self.octopode_ensemble = [self.create_octopus() for _ in range(self.n_octopodes)]
 		self.octopus_gene_length = len(self.octopode_ensemble[0].decision_kernel)
 		self.octopus_action_space = self.octopode_ensemble[0].n_actions
-		self.mutation_chance = 0.01
+		self.mutation_chance = 0.005
 
 	def create_octopus(self):
 		octopus = Octopus(self.world, permissible_steps=self.permissible_steps, n_lives=self.octopus_lives)
@@ -198,10 +229,12 @@ class MolluskEvolver():
 	def evolve_octopodes(self):
 		fitnesses = []
 		while self.n_generations > 0:
-			fitness = self.next_generation()
+			terminal = self.n_generations == 1
+			fitness = self.next_generation(terminal=terminal)
 			print(self.n_generations)
 			print(np.mean(fitness))
 			print(np.max(fitness))
+			print(np.std(fitness))
 			print("\n")
 			fitnesses.append(fitness)
 			self.n_generations -= 1
@@ -209,13 +242,27 @@ class MolluskEvolver():
 		return fitnesses
 
 
-	def next_generation(self):
+	def next_generation(self, terminal=False):
 		#Octopodes live, die, and are reborn within the confines of a single list comprehension
 		raw_fitness = np.array([o.samsara() for o in self.octopode_ensemble])
 
-		norm_fitness = softmax(raw_fitness)
+		norm_fitness = raw_fitness - min(raw_fitness)
 
-		self.octopode_ensemble = self.panmixia(norm_fitness)
+		pop_mean = np.mean(norm_fitness)
+		pop_std = np.std(norm_fitness)
+		def sigma_scaling(f):
+			scaled =  1 + (f - pop_mean)/(2*pop_std)
+			if scaled < 0:
+				scaled = 0.1
+			return scaled
+		norm_fitness = np.array([sigma_scaling(x) for x in norm_fitness])
+
+		norm_fitness = norm_fitness/sum(norm_fitness)
+
+		if not terminal:
+			self.octopode_ensemble = self.panmixia(norm_fitness)
+		else:
+			print("terminal")
 		return raw_fitness/self.octopus_lives
 
 	def panmixia(self, octopus_fitness):
@@ -229,11 +276,12 @@ class MolluskEvolver():
 		return next_generation_octopodes
 
 	def breed_octopodes(self, octopus_sub, octopus_domme):
-		split_spot = np.random.randint(0,self.octopus_gene_length)
+		split_A = np.random.randint(0,self.octopus_gene_length)
+		split_B = np.random.randint(0,self.octopus_gene_length)
 
 		def merge_genes(child_oct, oct_A, oct_B):
-			child_oct.decision_kernel[:split_spot] = oct_A.decision_kernel[:split_spot]
-			child_oct.decision_kernel[split_spot:] = oct_B.decision_kernel[split_spot:]
+			child_oct.decision_kernel = oct_A.decision_kernel
+			child_oct.decision_kernel[min(split_A, split_B):max(split_A, split_B)] = oct_B.decision_kernel[min(split_A, split_B):max(split_A, split_B)]
 
 		child_A = self.create_octopus()
 		merge_genes(child_A, octopus_sub, octopus_domme)

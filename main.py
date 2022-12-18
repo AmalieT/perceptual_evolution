@@ -14,8 +14,15 @@ import numpy as np
 # print(new_world.grid)
 
 
-me = MolluskEvolver(n_octopodes=100, n_generations=1000)
+me = MolluskEvolver(n_octopodes=200, n_generations=1000)
+# octopus = me.octopode_ensemble[0]
+# octopus.illustrated_life()
 
 fitnesses = me.evolve_octopodes()
 avg_fitnesses = [np.mean(f) for f in fitnesses]
+best = np.argmax(fitnesses[-1])
+print(avg_fitnesses)
+
+octomax = me.octopode_ensemble[best]
+octomax.illustrated_life()
 print(avg_fitnesses)
