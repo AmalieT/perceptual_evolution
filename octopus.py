@@ -6,20 +6,23 @@ from time import sleep
 
 class World():
 
-	def __init__(self, width, height, n_crabs):
+	def __init__(self, width, height, n_crabs, crab_max=10):
 
 		self.width = width
 		self.height = height
 
-		#crab, empty, wall
+		#wall, green, red
 		self.n_types = 3
 
+		self.crab_max = crab_max
+
 		self.grid = np.zeros((width, height))
+
 		#grid boundaries are walls
-		self.grid[0,:] = 2
-		self.grid[:,0] = 2
-		self.grid[-1,:] = 2
-		self.grid[:,-1] = 2
+		self.grid[0,:] = -1
+		self.grid[:,0] = -1
+		self.grid[-1,:] = -1
+		self.grid[:,-1] = -1
 
 		self.n_crabs = n_crabs
 
@@ -33,18 +36,18 @@ class World():
 		np.random.shuffle(non_wall_squares)
 		non_wall_squares = np.reshape(non_wall_squares, (self.width-2, self.height-2))
 
+		crab_quantity_grid = np.random.randint(1, self.crab_max+1, (self.width-2, self.height-2))
+
+		non_wall_squares = np.multiply(non_wall_squares, crab_quantity_grid)
+
 		self.grid[1:-1,1:-1] = non_wall_squares
 
 		return self
 
 	def eat_crab(self, x, y):
-		#If there's a crab on the square, eat it and return True
-		if self.grid[x,y] == 1:
-			self.grid[x,y] = 0
-			return True
-		else:
-			#Otherwies return False
-			return False
+		crabs = self.grid[x,y]
+		self.grid[x,y] = 0
+		return crabs
 
 	def get_perceptual_neighbourhood(self, x, y):
 		perceptual_neighbourhood = np.array([self.grid[x,y], self.grid[x+1,y], self.grid[x-1,y], self.grid[x,y+1], self.grid[x,y-1]])
@@ -53,14 +56,14 @@ class World():
 
 	def is_legal_move(self, x, y, move):
 		move_pos = np.array([x,y]) + move
-		if self.grid[move_pos[0], move_pos[1]] != 2:
+		if self.grid[move_pos[0], move_pos[1]] != -1:
 			return True
 		else:
 			return False
 
 class Octopus():
 
-	def __init__(self, world, permissible_steps=200, n_lives=100):
+	def __init__(self, world, permissible_steps=200, n_lives=100, max_crabs=10):
 
 		#the octopus that owns the world
 		self.world = world
@@ -89,7 +92,7 @@ class Octopus():
 		self.actions_dict = {
 			**moves_dict,
 			self.n_moves: self.move_randomly,
-			self.n_moves+1: self.eat_crab,
+			self.n_moves+1: self.move_randomly,
 			self.n_moves+2: self.eat_crab,
 		}
 
@@ -100,11 +103,23 @@ class Octopus():
 		self.rewards_dict = {
 			**moves_rewards_dict,
 			self.n_moves: {True: 0, False: -5},
-			self.n_moves+1: {True: 10, False: -1},
-			self.n_moves+2: {True: 10, False: -1},
+			self.n_moves+1: {True: 0, False: -5},
+			self.n_moves+2: {
+				0:-1,
+				1:1,
+				2:3,
+				3:6,
+				4:9,
+				5:10,
+				6:9,
+				7:6,
+				8:3,
+				9:1,
+				10:0,
+			},
 		}
 
-
+		self.max_crabs = max_crabs
 		self.perceptual_size = self.world.n_types**len(self.perceptual_neighbourhood)
 		self.decision_kernel = self.random_gene()
 
@@ -130,10 +145,21 @@ class Octopus():
 		def mapping(square):
 			if square == 0:
 				return "🌊 "
-			if square == 1:
+			if square > 0:
 				return "🦀 "
-			if square == 2:
+			if square == -1:
 				return "🧱 🧱"
+
+		perception_dict = self.build_perception_dict()
+		def perceptual_mapping(square):
+			if square == -1:
+				return "🧱 🧱"
+
+			p = perception_dict[square]
+			if p == 0:
+				return "💚 "
+			if p == 1:
+				return "❤️  "
 
 		while self.remaining_steps > 0:
 			print("Total Score: {}\n".format(self.reward))
@@ -144,6 +170,13 @@ class Octopus():
 						line_str += "🐙 "
 					else:
 						line_str += mapping(self.world.grid[i,j])
+				line_str += "\t"
+				for j in range(self.world.width):
+					if i == self.x and j == self.y:
+						line_str += "🐙 "
+					else:
+						line_str += perceptual_mapping(self.world.grid[i,j])
+
 				# line_str += "\n"
 				print(line_str)
 			self.next_action()
@@ -151,10 +184,22 @@ class Octopus():
 			os.system('clear')
 		return self
 
+	def build_perception_dict(self):
+		perception_dict = {i:self.decision_kernel[-i-1] for i in range(0,self.max_crabs+1)}
+		perception_dict[-1] = -1
+
+		return perception_dict
+
+	def perceive(self):
+		perception_dict = self.build_perception_dict()
+
+		perceived_neighbourhood = [perception_dict[d] for d in self.perceptual_neighbourhood]
+		return perceived_neighbourhood
 
 	def next_action(self):
 
-		decision_int = int(sum([d*self.world.n_types**i for i,d in enumerate(self.perceptual_neighbourhood)]))
+		perceived_neighbourhood = self.perceive()
+		decision_int = int(sum([(d+1)*self.world.n_types**i for i,d in enumerate(perceived_neighbourhood)]))
 
 
 		action = self.decision_kernel[decision_int]
@@ -164,8 +209,8 @@ class Octopus():
 		return self
 
 	def take_action(self, action):
-		is_success = self.actions_dict[action]()
-		reward = self.rewards_dict[action][is_success]
+		result = self.actions_dict[action]()
+		reward = self.rewards_dict[action][result]
 
 		self.remaining_steps -= 1
 		self.reward += reward
@@ -193,13 +238,16 @@ class Octopus():
 		return True
 
 	def eat_crab(self):
-		result = self.world.eat_crab(self.x, self.y)
+		crabs_eaten = self.world.eat_crab(self.x, self.y)
 		self.perceptual_neighbourhood = self.world.get_perceptual_neighbourhood(self.x, self.y)
 
-		return result
+		return crabs_eaten
 
 	def random_gene(self):
-		random_gene = np.random.randint(0, self.n_actions, self.perceptual_size)
+		random_gene_action = np.random.randint(0, self.n_actions, self.perceptual_size)
+		random_gene_perceive = np.random.randint(0,2, self.max_crabs+1)
+
+		random_gene = np.concatenate([random_gene_action, random_gene_perceive])
 
 		return random_gene
 
@@ -231,11 +279,12 @@ class MolluskEvolver():
 		while self.n_generations > 0:
 			terminal = self.n_generations == 1
 			fitness = self.next_generation(terminal=terminal)
-			print(self.n_generations)
-			print(np.mean(fitness))
-			print(np.max(fitness))
-			print(np.std(fitness))
-			print("\n")
+			if self.n_generations%10 == 0:
+				print(self.n_generations)
+				print(np.mean(fitness))
+				print(np.max(fitness))
+				print(np.std(fitness))
+				print("\n")
 			fitnesses.append(fitness)
 			self.n_generations -= 1
 
@@ -266,12 +315,9 @@ class MolluskEvolver():
 		return raw_fitness/self.octopus_lives
 
 	def panmixia(self, octopus_fitness):
-		next_generation_octopodes = []
-		while len(next_generation_octopodes) < self.n_octopodes:
-			octopus_sub, octopus_domme = np.random.choice(self.octopode_ensemble, size=2, replace=False, p=octopus_fitness)
-			child_A, child_B = self.breed_octopodes(octopus_sub, octopus_domme)
-			next_generation_octopodes.append(child_A)
-			next_generation_octopodes.append(child_B)
+		octo_parents = np.random.choice(self.octopode_ensemble, size=self.n_octopodes, replace=True, p=octopus_fitness)
+		next_generation_octopodes = [self.breed_octopodes(octo_parents[i], octo_parents[i+1]) for i in range(0, self.n_octopodes, 2)]
+		next_generation_octopodes = [c for x in next_generation_octopodes for c in x]
 		
 		return next_generation_octopodes
 
